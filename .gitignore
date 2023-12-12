@@ -1,0 +1,9 @@
+*.txt
+flickr8k/
+flickr30k/
+oldModels/features/
+
+oldModels/best_model(7).h5
+oldModels/best_model(8).h5
+oldModels/best_model(9).h5
+oldModels/best_model(6).h5
