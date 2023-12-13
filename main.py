@@ -1,6 +1,9 @@
 import os
+import sys
 import nltk
 import pickle
+import keyboard
+import threading
 import numpy as np
 from PIL import Image
 import tensorflow as tf
@@ -11,20 +14,23 @@ from keras.callbacks import EarlyStopping
 from keras.preprocessing.text import Tokenizer
 from keras.utils import load_img, img_to_array
 from keras.applications.xception import Xception
-from nltk.translate.bleu_score import corpus_bleu
 from keras.utils import to_categorical, plot_model
 from nltk.translate.meteor_score import meteor_score
 from keras_preprocessing.sequence import pad_sequences
 from keras.applications.vgg16 import VGG16, preprocess_input
 from keras.applications.densenet import DenseNet121, DenseNet201
+from nltk.translate.bleu_score import corpus_bleu, sentence_bleu
 from keras.layers import Input, Dense, LSTM, Embedding, Dropout, add
 
 BASE_DIR = 'flickr8k'
 F30k_DIR = 'flickr30k'
 WORKING_DIR = 'working'
 
+def getModel():
+    return VGG16()
+
 def load_backbone():
-    model = VGG16()
+    model = getModel()
     model = Model(inputs=model.inputs, outputs=model.layers[-2].output)
     return model
 
@@ -230,6 +236,56 @@ def evaluate_model(model, features, tokenizer, max_length, test, mapping):
         m_score = np.mean(meteor_scores)
         print(f"Progress: {idx + 1}/{total_images} - BLEU-1: {bleu1_score:.4f} - BLEU-2: {bleu2_score:.4f} - BLEU-3: {bleu3_score:.4f} - BLEU-4: {bleu4_score:.4f} - METEOR: {m_score:.4f}")
 
+ctrl_c_pressed = False
+
+def check_ctrl_c():
+    global ctrl_c_pressed
+    keyboard.wait("ctrl+c")
+    ctrl_c_pressed = True
+    print("Ctrl+C pressed. Saving results and exiting.")
+    save_results_and_exit("output.txt", results)
+
+threading.Thread(target=check_ctrl_c, daemon=True).start()
+
+def save_results_and_exit(output_file, results):
+    with open(output_file, 'w') as file:
+        for result in results:
+            print(result, file=file)
+    print(f"Results saved to {output_file}")
+    sys.exit(0)
+
+def evaluate_pictures(model, features, tokenizer, max_length, test, mapping, output_file="output.txt"):
+    global results, ctrl_c_pressed
+    print(f"--------- Starting process of finding metrics for every picture in the given set ----------")
+    total_images = len(test)
+    results = []
+    results.append(f"Evaluation of model: {getModel().name} predictions of pictures from dataset: {BASE_DIR}")
+    try:
+        for idx, key in enumerate(test):
+            captions = mapping[key]
+            y_pred = predict_caption(model, features[key], tokenizer, max_length)
+            actual_captions = [caption.split() for caption in captions]
+            y_pred = y_pred.split()
+            actual = actual_captions
+            predicted = y_pred
+            bleu1_score = sentence_bleu(actual, predicted, weights=(1.0, 0, 0, 0))
+            bleu2_score = sentence_bleu(actual, predicted, weights=(0.5, 0.5, 0, 0))
+            bleu3_score = sentence_bleu(actual, predicted, weights=(0.33, 0.33, 0.33, 0))
+            bleu4_score = sentence_bleu(actual, predicted, weights=(0.25, 0.25, 0.25, 0.25))
+            meteor = meteor_score(actual_captions, y_pred, alpha=0.9, beta=3.0, gamma=0.5)
+            result_str = f"Progress: {idx + 1}/{total_images}; - BLEU-1: {bleu1_score:.4f}; - BLEU-2: {bleu2_score:.4f}; - BLEU-3: {bleu3_score:.4f}; - BLEU-4: {bleu4_score:.4f}; - METEOR: {meteor:.4f}; - Image: {key}"
+            results.append(result_str)
+            print(result_str)
+            if ctrl_c_pressed:
+                raise KeyboardInterrupt
+
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        print(f"An error occurred: {e}")
+    else:
+        save_results_and_exit(output_file, results)
+
 def prepare_data(model):
     features_file_path = os.path.join(WORKING_DIR, 'features.pkl')
     features = load_features_from_file(features_file_path, BASE_DIR, WORKING_DIR, model)
@@ -296,8 +352,9 @@ def main():
         model = load_model(os.path.join(WORKING_DIR, 'best_model.h5'), compile=False)
         model.compile(loss='categorical_crossentropy', optimizer='adam')
 
-    evaluate_model(model, features, tokenizer, max_length, train, mapping) 
-    #generate_caption(model, features, tokenizer, max_length, "241346471_c756a8f139.jpg", mapping)
+    #evaluate_model(model, features, tokenizer, max_length, test, mapping) 
+    evaluate_pictures(model, features, tokenizer, max_length, test + train, mapping) 
+    #generate_caption(model, features, tokenizer, max_length, "3025093.jpg", mapping)
     #predictValidationData('C:/Users/Piotr/Downloads/1.jpg', model, tokenizer, max_length)
     #fine_tune_model(1, 64, model, features, mapping, tokenizer, vocab_size, max_length, train, data_generator)
     #predict_and_evaluate_on_dataset(F30k_DIR + '/Images', model, tokenizer, max_length, create_captions_mapping(load_captions(os.path.join(F30k_DIR, 'captions.txt'))))
